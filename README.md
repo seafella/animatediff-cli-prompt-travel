@@ -7,15 +7,55 @@ I added a experimental feature to animatediff-cli to change the prompt in the mi
 It seems to work surprisingly well!
 
 ### Example
+
+- region prompt(txt2img / no controlnet)
+- region 0 ... 1girl, upper body etc
+- region 1 ... ((car)), street, road,no human etc
+- background ... town, outdoors etc
+- ip adapter input for background / region 0 / region 1
+<img src="https://github.com/s9roll7/animatediff-cli-prompt-travel/assets/118420657/ca355f4b-f4c0-4405-88f4-1c80632e32a6" width="512">
+
+- animatediff generate -c config/prompts/region_txt2img.json -W 512 -H 768 -L 32 -C 16
+- region 0 mask / region 1 mask / txt2img
+
+<div><video controls src="https://github.com/s9roll7/animatediff-cli-prompt-travel/assets/118420657/88eb1572-2772-4d76-89c1-c6bf8142283d" muted="false"></video></div>
+<br>
+
+
+
+<div><video controls src="https://github.com/s9roll7/animatediff-cli-prompt-travel/assets/118420657/55042dff-4e23-43b9-b4d6-6f2228b943d2" muted="false"></video></div>
+<br>
+
+
+
+- img2img
+- This can be improved using controlnet, but this sample does not use it.
+- source / denoising_strength 0.7 / denoising_strength 0.85
+<div><video controls src="https://github.com/s9roll7/animatediff-cli-prompt-travel/assets/118420657/4a9ecf3e-d1c7-468a-a85f-abce7b4c4aab" muted="false"></video></div>
+<br>
+<br>
+
+- [A command to stylization with region has been added](https://github.com/s9roll7/animatediff-cli-prompt-travel#video-stylization-with-region).
+- (You can also create json manually without using the stylize command.)
+- region prompt
+- Region division into person shapes
+- source / img2img / txt2img
+<div><video controls src="https://github.com/s9roll7/animatediff-cli-prompt-travel/assets/118420657/10101ab8-39cc-4dbc-85c8-af558f80c6fe" muted="false"></video></div>
+<br>
+
+- source / Region division into person shapes / inpaint
+<div><video controls src="https://github.com/s9roll7/animatediff-cli-prompt-travel/assets/118420657/d9231c8e-94b6-4608-97ba-6ab3fc85bcfa" muted="false"></video></div>
+<br>
+<br>
+
+
+
+
 - [A command to stylization with mask has been added](https://github.com/s9roll7/animatediff-cli-prompt-travel#video-stylization-with-mask).
 - more example [here](https://github.com/s9roll7/animatediff-cli-prompt-travel/issues/111)
 
 <div><video controls src="https://github.com/s9roll7/animatediff-cli-prompt-travel/assets/118420657/461cd68a-511a-4ad8-a2ee-7078faed7354" muted="false"></video></div>
 <br>
-
-<div><video controls src="https://github.com/s9roll7/animatediff-cli-prompt-travel/assets/118420657/71134608-1f6d-4c97-8535-68e26d692f87" muted="false"></video></div>
-<br>
-
 
 
 - [A command to automate video stylization has been added](https://github.com/s9roll7/animatediff-cli-prompt-travel#video-stylization).
@@ -24,19 +64,6 @@ It seems to work surprisingly well!
 - more example [here](https://github.com/s9roll7/animatediff-cli-prompt-travel/issues/29)
 
 <div><video controls src="https://github.com/s9roll7/animatediff-cli-prompt-travel/assets/118420657/2f1965f2-9a50-485e-ac95-e888a3189ba2" muted="false"></video></div>
-<br>
-
-- Numbered from left to right.
-- 1.prompt + lora
-- 2.prompt + lora + IP-Adapter(scale 0.5)
-- 3.prompt + lora + IP-Adapter Plus(scale 0.5)
-- 4.prompt + lora + Controlnet Reference Only(style_fidelity 0)
-- input image
-
-![0000](https://github.com/s9roll7/animatediff-cli-prompt-travel/assets/118420657/4ae90f13-341d-4965-adfc-174ec2e61cd7)
-
-
-<div><video controls src="https://github.com/s9roll7/animatediff-cli-prompt-travel/assets/118420657/d9d300a9-1107-4a3b-a1f1-3245b49dde10" muted="false"></video></div>
 <br>
 
 
@@ -132,7 +159,7 @@ I found a detailed tutorial
 ### How To Use
 Almost same as the original animatediff-cli, but with a slight change in config format.
 ```json
-# prompt_travel.json
+
 {
   "name": "sample",
   "path": "share/Stable-diffusion/mistoonAnime_v20.safetensors",  # Specify Checkpoint as a path relative to /animatediff-cli/data
@@ -146,6 +173,7 @@ Almost same as the original animatediff-cli, but with a slight change in config 
   "steps": 40,
   "guidance_scale": 20,     # cfg scale
   "clip_skip": 2,
+  "prompt_fixed_ratio": 0.5,
   "head_prompt": "masterpiece, best quality, a beautiful and detailed portriat of muffet, monster girl,((purple body:1.3)),humanoid, arachnid, anthro,((fangs)),pigtails,hair bows,5 eyes,spider girl,6 arms,solo",
   "prompt_map": {           # "FRAME" : "PROMPT" format / ex. prompt for frame 32 is "head_prompt" + prompt_map["32"] + "tail_prompt"
     "0":  "smile standing,((spider webs:1.0))",
@@ -170,6 +198,7 @@ Almost same as the original animatediff-cli, but with a slight change in config 
       "enable": true,
       # Specify input image directory relative to /animatediff-cli/data (important! No need to specify frames in the config file. The effect on generation is exactly the same logic as the placement of the prompt)
       "input_image_dir": "ip_adapter_image/test",
+      "prompt_fixed_ratio": 0.5,
       # save input image or not
       "save_input_image": true,
       # Ratio of image prompt vs text prompt (important). Even if you want to emphasize only the image prompt in 1.0, do not leave prompt/neg prompt empty, but specify a general text such as "best quality".
@@ -177,6 +206,55 @@ Almost same as the original animatediff-cli, but with a slight change in config 
       # IP-Adapter or IP-Adapter Plus or IP-Adapter Plus Face (important) It would be a completely different outcome. Not always PLUS a superior result.
       "is_plus_face": true,
       "is_plus": true
+  },
+  "img2img_map": {
+      # enable/disable
+      "enable": true,
+      # Directory where the initial image is placed
+      "init_img_dir": "..\\stylize\\2023-10-27T19-43-01-sample-mistoonanime_v20\\00_img2img",
+      "save_init_image": true,
+      # The smaller the value, the closer the result will be to the initial image.
+      "denoising_strength": 0.7
+  },
+  "region_map": {
+      # setting for region 0. You can also add regions if necessary.
+      # The region added at the back will be drawn at the front.
+      "0": {
+          # enable/disable
+          "enable": true,
+          # If you want to draw a separate object for each region, enter a value of 0.1 or higher.
+          "crop_generation_rate": 0.1,
+          # Directory where mask images are placed
+          "mask_dir": "..\\stylize\\2023-10-27T19-43-01-sample-mistoonanime_v20\\r_fg_00_2023-10-27T19-44-08\\00_mask",
+          "save_mask": true,
+          # If true, the initial image will be drawn as is (inpaint)
+          "is_init_img": false,
+          # conditions for region 0
+          "condition": {
+              # text prompt for region 0
+              "prompt_fixed_ratio": 0.5,
+              "head_prompt": "",
+              "prompt_map": {
+                  "0": "(masterpiece, best quality:1.2), solo, 1girl, kusanagi motoko, looking at viewer, jacket, leotard, thighhighs, gloves, cleavage"
+               },
+              "tail_prompt": "",
+              # image prompt(ip adapter) for region 0
+              # It is not possible to change lora for each region, but you can do something similar using an ip adapter.
+              "ip_adapter_map": {
+                  "enable": true,
+                  "input_image_dir": "..\\stylize\\2023-10-27T19-43-01-sample-mistoonanime_v20\\r_fg_00_2023-10-27T19-44-08\\00_ipadapter",
+                  "prompt_fixed_ratio": 0.5,
+                  "save_input_image": true,
+                  "resized_to_square": false
+              }
+          }
+      },
+      # setting for background
+      "background": {
+          # If true, the initial image will be drawn as is (inpaint)
+          "is_init_img": true,
+          "hint": "background's condition refers to the one in root"
+      }
   },
   "controlnet_map": {       # config for controlnet(for generation)
     "input_image_dir" : "controlnet_image/test",    # Specify input image directory relative to /animatediff-cli/data (important! Please refer to the directory structure of sample. No need to specify frames in the config file.)
@@ -341,6 +419,12 @@ python -m pip install -e .[stylize]
 # create config file from src video
 animatediff stylize create-config YOUR_SRC_MOVIE_FILE.mp4
 
+# create config file from src video (img2img)
+animatediff stylize create-config YOUR_SRC_MOVIE_FILE.mp4 -i2i
+
+# If you have less than 12GB of vram, specify low vram mode
+animatediff stylize create-config YOUR_SRC_MOVIE_FILE.mp4 -lo
+
 # Edit the config file by referring to the hint displayed in the log when the command finishes
 # It is recommended to specify a short length for the test run
 
@@ -357,6 +441,78 @@ animatediff stylize generate STYLYZE_DIR -L 16 -FO 200
 animatediff stylize generate STYLYZE_DIR
 ```
 
+#### Video Stylization with region
+```sh
+cd animatediff-cli-prompt-travel
+venv\Scripts\activate.bat
+
+# If you want to use the 'stylize create-region' command, additional installation required
+python -m pip install -e .[stylize_mask]
+
+# [1] create config file from src video
+animatediff stylize create-config YOUR_SRC_MOVIE_FILE.mp4
+# for img2img
+animatediff stylize create-config YOUR_SRC_MOVIE_FILE.mp4 -i2i
+
+# If you have less than 12GB of vram, specify low vram mode
+animatediff stylize create-config YOUR_SRC_MOVIE_FILE.mp4 -lo
+```
+```json
+# in prompt.json (generated in [1])
+# [2] write the object you want to mask
+# ex.) If you want to mask a person
+    "stylize_config": {
+        "create_mask": [
+            "person"
+        ],
+        "composite": {
+```
+```sh
+# [3] generate region
+animatediff stylize create-region STYLYZE_DIR
+
+# If you have less than 12GB of vram, specify low vram mode
+animatediff stylize create-region STYLYZE_DIR -lo
+
+("animatediff stylize create-region -h" for help)
+```
+```json
+# in prompt.json (generated in [1])
+[4] edit region_map,prompt,controlnet setting. Put the image you want to reference in the ip adapter directory (both background and region)
+  "region_map": {
+      "0": {
+          "enable": true,
+          "mask_dir": "..\\stylize\\2023-10-27T19-43-01-sample-mistoonanime_v20\\r_fg_00_2023-10-27T19-44-08\\00_mask",
+          "save_mask": true,
+          "is_init_img": false, # <----------
+          "condition": {
+              "prompt_fixed_ratio": 0.5,
+              "head_prompt": "",  # <----------
+              "prompt_map": {  # <----------
+                  "0": "(masterpiece, best quality:1.2), solo, 1girl, kusanagi motoko, looking at viewer, jacket, leotard, thighhighs, gloves, cleavage"
+               },
+              "tail_prompt": "",  # <----------
+              "ip_adapter_map": {
+                  "enable": true,
+                  "input_image_dir": "..\\stylize\\2023-10-27T19-43-01-sample-mistoonanime_v20\\r_fg_00_2023-10-27T19-44-08\\00_ipadapter",
+                  "prompt_fixed_ratio": 0.5,
+                  "save_input_image": true,
+                  "resized_to_square": false
+              }
+          }
+      },
+      "background": {
+          "is_init_img": false,  # <----------
+          "hint": "background's condition refers to the one in root"
+      }
+  },
+```
+```sh
+# [5] generate
+animatediff stylize generate STYLYZE_DIR
+```
+
+
 #### Video Stylization with mask
 ```sh
 cd animatediff-cli-prompt-travel
@@ -367,6 +523,9 @@ python -m pip install -e .[stylize_mask]
 
 # [1] create config file from src video
 animatediff stylize create-config YOUR_SRC_MOVIE_FILE.mp4
+
+# If you have less than 12GB of vram, specify low vram mode
+animatediff stylize create-config YOUR_SRC_MOVIE_FILE.mp4 -lo
 ```
 ```json
 # in prompt.json (generated in [1])
@@ -473,12 +632,14 @@ ex.  \_\_animal\_\_ for animal.txt. \_\_background-color\_\_ for background-colo
 ### Recommended setting
 - checkpoint : [mistoonAnime_v20](https://civitai.com/models/24149/mistoonanime) for anime, [xxmix9realistic_v40](https://civitai.com/models/47274) for photoreal
 - scheduler : "k_dpmpp_sde"
-- upscale : Enable controlnet_tile and controlnet_ip2p only. If you can provide a good reference image, controlnet_ref may also be useful.
+- upscale : Enable controlnet_tile and controlnet_ip2p only.
+- lora and ip adapter
 
 ### Recommended settings for 8-12 GB of vram
-- max_samples_on_vram : Set to 0 if vram is insufficient when using controlnet
-- max_models_on_vram : 1
+- max_samples_on_vram : 0 (The generation speed for this setting has been improved in the latest version.)
+- max_models_on_vram : 1 (The generation speed for this setting has been improved in the latest version.)
 - Generate at lower resolution and upscale to higher resolution
+- In the latest version, the amount of vram used during generation has been reduced.
 ```sh
 animatediff generate -c config/prompts/your_config.json -W 384 -H 576 -L 48 -C 16
 animatediff tile-upscale output/2023-08-25T20-00-00-sample-mistoonanime_v20/00-341774366206100 -W 512

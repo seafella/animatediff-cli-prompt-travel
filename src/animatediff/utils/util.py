@@ -59,8 +59,8 @@ def path_from_cwd(path: PathLike) -> str:
 
 def resize_for_condition_image(input_image: Image, us_width: int, us_height: int):
     input_image = input_image.convert("RGB")
-    H = int(round(us_height / 64.0)) * 64
-    W = int(round(us_width / 64.0)) * 64
+    H = int(round(us_height / 8.0)) * 8
+    W = int(round(us_width / 8.0)) * 8
     img = input_image.resize((W, H), resample=Image.LANCZOS)
     return img
 
@@ -287,7 +287,7 @@ def prepare_softsplat():
         )
 
 
-def extract_frames(movie_file_path, fps, out_dir, aspect_ratio, duration, offset, size_of_short_edge=-1):
+def extract_frames(movie_file_path, fps, out_dir, aspect_ratio, duration, offset, size_of_short_edge=-1, low_vram_mode=False):
     import ffmpeg
 
     probe = ffmpeg.probe(movie_file_path)
@@ -316,6 +316,13 @@ def extract_frames(movie_file_path, fps, out_dir, aspect_ratio, duration, offset
             height = size_of_short_edge
             width = int( (size_of_short_edge * r)//8 * 8)
             node = node.filter('scale', width, size_of_short_edge)
+
+    if low_vram_mode:
+        if aspect_ratio == -1:
+            aspect_ratio = width/height
+            logger.info(f"low {aspect_ratio=}")
+            aspect_ratio = max(min( aspect_ratio, 1.5 ), 0.6666)
+            logger.info(f"low {aspect_ratio=}")
 
     if aspect_ratio > 0:
         # aspect ratio (width / height)

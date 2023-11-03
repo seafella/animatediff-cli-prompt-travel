@@ -2,9 +2,11 @@ import glob
 import logging
 import os
 import re
+from functools import partial
+from itertools import chain
 from os import PathLike
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any, Callable, Dict, List, Union
 
 import numpy as np
 import torch
@@ -17,6 +19,7 @@ from diffusers import (AutoencoderKL, ControlNetModel, DiffusionPipeline,
                        StableDiffusionControlNetImg2ImgPipeline,
                        StableDiffusionPipeline)
 from PIL import Image
+from torchvision.datasets.folder import IMG_EXTENSIONS
 from tqdm.rich import tqdm
 from transformers import (AutoImageProcessor, CLIPImageProcessor,
                           CLIPTextModel, CLIPTokenizer,
@@ -709,13 +712,9 @@ def ip_adapter_preprocess(
         if ip_adapter_config_map["enable"] == True:
             resized_to_square = ip_adapter_config_map["resized_to_square"] if "resized_to_square" in ip_adapter_config_map else False
             image_dir = data_dir.joinpath( ip_adapter_config_map["input_image_dir"] )
-            imgs = sorted(glob.glob( os.path.join(image_dir, "[0-9]*.png"), recursive=False))
+            imgs = sorted(chain.from_iterable([glob.glob(os.path.join(image_dir, f"[0-9]*{ext}")) for ext in IMG_EXTENSIONS]))
             if len(imgs) > 0:
                 prepare_ip_adapter()
-                ip_adapter_map["scale"] = ip_adapter_config_map["scale"]
-                ip_adapter_map["is_plus"] = ip_adapter_config_map["is_plus"]
-                ip_adapter_map["is_plus_face"] = ip_adapter_config_map["is_plus_face"] if "is_plus_face" in ip_adapter_config_map else False
-                ip_adapter_map["is_light"] = ip_adapter_config_map["is_light"] if "is_light" in ip_adapter_config_map else False
                 ip_adapter_map["images"] = {}
                 for img_path in tqdm(imgs, desc=f"Preprocessing images (ip_adapter)"):
                     frame_no = int(Path(img_path).stem)
@@ -726,6 +725,21 @@ def ip_adapter_preprocess(
                             ip_adapter_map["images"][frame_no] = get_resized_image2(img_path, 256)
                         processed = True
 
+            if processed:
+                ip_adapter_config_map["prompt_fixed_ratio"] = max(min(1.0, ip_adapter_config_map["prompt_fixed_ratio"]),0)
+
+                prompt_fixed_ratio = ip_adapter_config_map["prompt_fixed_ratio"]
+                prompt_map = ip_adapter_map["images"]
+                prompt_map = dict(sorted(prompt_map.items()))
+                key_list = list(prompt_map.keys())
+                for k0,k1 in zip(key_list,key_list[1:]+[duration]):
+                    k05 = k0 + round((k1-k0) * prompt_fixed_ratio)
+                    if k05 == k1:
+                        k05 -= 1
+                    if k05 != k0:
+                        prompt_map[k05] = prompt_map[k0]
+                ip_adapter_map["images"] = prompt_map
+
             if (ip_adapter_config_map["save_input_image"] == True) and processed:
                 det_dir = out_dir.joinpath(f"{0:02d}_ip_adapter/")
                 det_dir.mkdir(parents=True, exist_ok=True)
@@ -735,6 +749,295 @@ def ip_adapter_preprocess(
 
     return ip_adapter_map if processed else None
 
+def prompt_preprocess(
+        prompt_config_map: Dict[str, Any],
+        head_prompt: str,
+        tail_prompt: str,
+        prompt_fixed_ratio: float,
+        video_length: int,
+):
+    prompt_map = {}
+    for k in prompt_config_map.keys():
+        if int(k) < video_length:
+            pr = prompt_config_map[k]
+            if head_prompt:
+                pr = head_prompt + "," + pr
+            if tail_prompt:
+                pr = pr + "," + tail_prompt
+
+            prompt_map[int(k)]=pr
+
+    prompt_map = dict(sorted(prompt_map.items()))
+    key_list = list(prompt_map.keys())
+    for k0,k1 in zip(key_list,key_list[1:]+[video_length]):
+        k05 = k0 + round((k1-k0) * prompt_fixed_ratio)
+        if k05 == k1:
+            k05 -= 1
+        if k05 != k0:
+            prompt_map[k05] = prompt_map[k0]
+
+    return prompt_map
+
+
+def region_preprocess(
+        model_config: ModelConfig = ...,
+        width: int = 512,
+        height: int = 512,
+        duration: int = 16,
+        out_dir: PathLike = ...,
+        is_init_img_exist: bool = False,
+        ):
+
+    is_bg_init_img = False
+    if is_init_img_exist:
+        if model_config.region_map:
+            if "background" in model_config.region_map:
+                is_bg_init_img = model_config.region_map["background"]["is_init_img"]
+
+
+    region_condi_list=[]
+
+    condi_index = 0
+
+    prev_ip_map = None
+
+    if not is_bg_init_img:
+        ip_map = ip_adapter_preprocess(
+                model_config.ip_adapter_map,
+                width,
+                height,
+                duration,
+                out_dir
+            )
+
+        if ip_map:
+            prev_ip_map = ip_map
+
+        condition_map = {
+            "prompt_map": prompt_preprocess(
+                model_config.prompt_map,
+                model_config.head_prompt,
+                model_config.tail_prompt,
+                model_config.prompt_fixed_ratio,
+                duration
+            ),
+            "ip_adapter_map": ip_map
+        }
+
+        region_condi_list.append( condition_map )
+
+        bg_src = condi_index
+        condi_index += 1
+    else:
+        bg_src = -1
+
+    region_list=[
+        {
+            "mask_images": None,
+            "src" : bg_src,
+            "crop_generation_rate" : 0
+        }
+    ]
+
+    if model_config.region_map:
+        for r in model_config.region_map:
+            if r == "background":
+                continue
+            if model_config.region_map[r]["enable"] != True:
+                continue
+            region_dir = out_dir.joinpath(f"region_{int(r):05d}/")
+            region_dir.mkdir(parents=True, exist_ok=True)
+
+            mask_map = mask_preprocess(
+                model_config.region_map[r],
+                width,
+                height,
+                duration,
+                region_dir
+            )
+
+            if not mask_map:
+                continue
+
+            if model_config.region_map[r]["is_init_img"] == False:
+                ip_map = ip_adapter_preprocess(
+                        model_config.region_map[r]["condition"]["ip_adapter_map"],
+                        width,
+                        height,
+                        duration,
+                        region_dir
+                    )
+
+                if ip_map:
+                    prev_ip_map = ip_map
+
+                condition_map={
+                    "prompt_map": prompt_preprocess(
+                        model_config.region_map[r]["condition"]["prompt_map"],
+                        model_config.region_map[r]["condition"]["head_prompt"],
+                        model_config.region_map[r]["condition"]["tail_prompt"],
+                        model_config.region_map[r]["condition"]["prompt_fixed_ratio"],
+                        duration
+                    ),
+                    "ip_adapter_map": ip_map
+                }
+
+                region_condi_list.append( condition_map )
+
+                src = condi_index
+                condi_index += 1
+            else:
+                if is_init_img_exist == False:
+                    continue
+                src = -1
+
+            region_list.append(
+                {
+                    "mask_images": mask_map,
+                    "src" : src,
+                    "crop_generation_rate" : model_config.region_map[r]["crop_generation_rate"] if "crop_generation_rate" in model_config.region_map[r] else 0
+                }
+            )
+
+    ip_adapter_config_map = None
+
+    if prev_ip_map is not None:
+        ip_adapter_config_map={}
+        ip_adapter_config_map["scale"] = model_config.ip_adapter_map["scale"]
+        ip_adapter_config_map["is_plus"] = model_config.ip_adapter_map["is_plus"]
+        ip_adapter_config_map["is_plus_face"] = model_config.ip_adapter_map["is_plus_face"] if "is_plus_face" in model_config.ip_adapter_map else False
+        ip_adapter_config_map["is_light"] = model_config.ip_adapter_map["is_light"] if "is_light" in model_config.ip_adapter_map else False
+        for c in region_condi_list:
+            if c["ip_adapter_map"] == None:
+                logger.info(f"fill map")
+                c["ip_adapter_map"] = prev_ip_map
+
+
+
+
+
+    #for c in region_condi_list:
+    #    logger.info(f"{c['prompt_map']=}")
+
+
+    if not region_condi_list:
+        raise ValueError("erro! There is not a single valid region")
+
+    return region_condi_list, region_list, ip_adapter_config_map
+
+def img2img_preprocess(
+        img2img_config_map: Dict[str, Any] = None,
+        width: int = 512,
+        height: int = 512,
+        duration: int = 16,
+        out_dir: PathLike = ...,
+        ):
+
+    img2img_map={}
+
+    processed = False
+
+    if img2img_config_map:
+        if img2img_config_map["enable"] == True:
+            image_dir = data_dir.joinpath( img2img_config_map["init_img_dir"] )
+            imgs = sorted(glob.glob( os.path.join(image_dir, "[0-9]*.png"), recursive=False))
+            if len(imgs) > 0:
+                img2img_map["images"] = {}
+                img2img_map["denoising_strength"] = img2img_config_map["denoising_strength"]
+                for img_path in tqdm(imgs, desc=f"Preprocessing images (img2img)"):
+                    frame_no = int(Path(img_path).stem)
+                    if frame_no < duration:
+                        img2img_map["images"][frame_no] = get_resized_image(img_path, width, height)
+                        processed = True
+
+            if (img2img_config_map["save_init_image"] == True) and processed:
+                det_dir = out_dir.joinpath(f"{0:02d}_img2img_init_img/")
+                det_dir.mkdir(parents=True, exist_ok=True)
+                for frame_no in tqdm(img2img_map["images"], desc=f"Saving Preprocessed images (img2img)"):
+                    save_path = det_dir.joinpath(f"{frame_no:08d}.png")
+                    img2img_map["images"][frame_no].save(save_path)
+
+    return img2img_map if processed else None
+
+def mask_preprocess(
+        region_config_map: Dict[str, Any] = None,
+        width: int = 512,
+        height: int = 512,
+        duration: int = 16,
+        out_dir: PathLike = ...,
+        ):
+
+    mask_map={}
+
+    processed = False
+    size = None
+    mode = None
+
+    if region_config_map:
+        image_dir = data_dir.joinpath( region_config_map["mask_dir"] )
+        imgs = sorted(glob.glob( os.path.join(image_dir, "[0-9]*.png"), recursive=False))
+        if len(imgs) > 0:
+            for img_path in tqdm(imgs, desc=f"Preprocessing images (mask)"):
+                frame_no = int(Path(img_path).stem)
+                if frame_no < duration:
+                    mask_map[frame_no] = get_resized_image(img_path, width, height)
+                    if size is None:
+                        size = mask_map[frame_no].size
+                        mode = mask_map[frame_no].mode
+
+                    processed = True
+
+        if processed:
+            if 0 in mask_map:
+                prev_img = mask_map[0]
+            else:
+                prev_img = Image.new(mode, size, color=0)
+
+            for i in range(duration):
+                if i in mask_map:
+                    prev_img = mask_map[i]
+                else:
+                    mask_map[i] = prev_img
+
+        if (region_config_map["save_mask"] == True) and processed:
+            det_dir = out_dir.joinpath(f"mask/")
+            det_dir.mkdir(parents=True, exist_ok=True)
+            for frame_no in tqdm(mask_map, desc=f"Saving Preprocessed images (mask)"):
+                save_path = det_dir.joinpath(f"{frame_no:08d}.png")
+                mask_map[frame_no].save(save_path)
+
+    return mask_map if processed else None
+
+def wild_card_conversion(model_config: ModelConfig = ...,):
+    from animatediff.utils.wild_card import replace_wild_card
+
+    wild_card_dir = get_dir("wildcards")
+    for k in model_config.prompt_map.keys():
+        model_config.prompt_map[k] = replace_wild_card(model_config.prompt_map[k], wild_card_dir)
+
+    if model_config.head_prompt:
+        model_config.head_prompt = replace_wild_card(model_config.head_prompt, wild_card_dir)
+    if model_config.tail_prompt:
+        model_config.tail_prompt = replace_wild_card(model_config.tail_prompt, wild_card_dir)
+
+    model_config.prompt_fixed_ratio = max(min(1.0, model_config.prompt_fixed_ratio),0)
+
+    if model_config.region_map:
+        for r in model_config.region_map:
+            if r == "background":
+                continue
+
+            if "condition" in model_config.region_map[r]:
+                c = model_config.region_map[r]["condition"]
+                for k in c["prompt_map"].keys():
+                    c["prompt_map"][k] = replace_wild_card(c["prompt_map"][k], wild_card_dir)
+
+                if "head_prompt" in c:
+                    c["head_prompt"] = replace_wild_card(c["head_prompt"], wild_card_dir)
+                if "tail_prompt" in c:
+                    c["tail_prompt"] = replace_wild_card(c["tail_prompt"], wild_card_dir)
+                if "prompt_fixed_ratio" in c:
+                    c["prompt_fixed_ratio"] = max(min(1.0, c["prompt_fixed_ratio"]),0)
 
 def save_output(
         pipeline_output,
@@ -796,11 +1099,11 @@ def save_output(
 
 def run_inference(
     pipeline: AnimationPipeline,
-    prompt: str = ...,
     n_prompt: str = ...,
     seed: int = -1,
     steps: int = 25,
     guidance_scale: float = 7.5,
+    unet_batch_size: int = 1,
     width: int = 512,
     height: int = 512,
     duration: int = 16,
@@ -811,25 +1114,50 @@ def run_inference(
     context_overlap: int = 4,
     context_schedule: str = "uniform",
     clip_skip: int = 1,
-    prompt_map: Dict[int, str] = None,
     controlnet_map: Dict[str, Any] = None,
     controlnet_image_map: Dict[str,Any] = None,
     controlnet_type_map: Dict[str,Any] = None,
     controlnet_ref_map: Dict[str,Any] = None,
     no_frames :bool = False,
-    ip_adapter_map: Dict[str,Any] = None,
+    img2img_map: Dict[str,Any] = None,
+    ip_adapter_config_map: Dict[str,Any] = None,
+    region_list: List[Any] = None,
+    region_condi_list: List[Any] = None,
     output_map: Dict[str,Any] = None,
     is_single_prompt_mode: bool = False,
 ):
     out_dir = Path(out_dir)  # ensure out_dir is a Path
 
+    # Trim and clean up the prompt for filename use
+    prompt_map = region_condi_list[0]["prompt_map"]
+    prompt_tags = [re_clean_prompt.sub("", tag).strip().replace(" ", "-") for tag in prompt_map[list(prompt_map.keys())[0]].split(",")]
+    prompt_str = "_".join((prompt_tags[:6]))[:50]
+    frame_dir = out_dir.joinpath(f"{idx:02d}-{seed}")
+    out_file = out_dir.joinpath(f"{idx:02d}_{seed}_{prompt_str}")
+
+    def preview_callback(i: int, video: torch.Tensor, save_fn: Callable[[torch.Tensor], None], out_file: str) -> None:
+        save_fn(video, out_file=Path(f"{out_file}_preview@{i}"))
+
+    save_fn = partial(
+        save_output,
+        frame_dir=frame_dir,
+        output_map=output_map,
+        no_frames=no_frames,
+        save_frames=partial(save_frames, show_progress=False),
+        save_video=save_video
+    )
+    callback = partial(preview_callback, save_fn=save_fn, out_file=out_file)
+
     seed_everything(seed)
 
+    logger.info(f"{len( region_condi_list )=}")
+    logger.info(f"{len( region_list )=}")
+
     pipeline_output = pipeline(
-        prompt=prompt,
         negative_prompt=n_prompt,
         num_inference_steps=steps,
         guidance_scale=guidance_scale,
+        unet_batch_size=unet_batch_size,
         width=width,
         height=height,
         video_length=duration,
@@ -839,28 +1167,24 @@ def run_inference(
         context_overlap=context_overlap,
         context_schedule=context_schedule,
         clip_skip=clip_skip,
-        prompt_map=prompt_map,
         controlnet_type_map=controlnet_type_map,
         controlnet_image_map=controlnet_image_map,
         controlnet_ref_map=controlnet_ref_map,
         controlnet_max_samples_on_vram=controlnet_map["max_samples_on_vram"] if "max_samples_on_vram" in controlnet_map else 999,
         controlnet_max_models_on_vram=controlnet_map["max_models_on_vram"] if "max_models_on_vram" in controlnet_map else 99,
         controlnet_is_loop = controlnet_map["is_loop"] if "is_loop" in controlnet_map else True,
-        ip_adapter_map=ip_adapter_map,
+        img2img_map=img2img_map,
+        ip_adapter_config_map=ip_adapter_config_map,
+        region_list=region_list,
+        region_condi_list=region_condi_list,
         interpolation_factor=1,
         is_single_prompt_mode=is_single_prompt_mode,
+        callback=callback,
+        callback_steps=output_map.get("preview_steps"),
     )
-
     logger.info("Generation complete, saving...")
 
-    # Trim and clean up the prompt for filename use
-    prompt_tags = [re_clean_prompt.sub("", tag).strip().replace(" ", "-") for tag in prompt_map[list(prompt_map.keys())[0]].split(",")]
-    prompt_str = "_".join((prompt_tags[:6]))[:50]
-
-    frame_dir = out_dir.joinpath(f"{idx:02d}-{seed}")
-    out_file = out_dir.joinpath(f"{idx:02d}_{seed}_{prompt_str}")
-
-    save_output( pipeline_output, frame_dir, out_file, output_map, no_frames, save_frames, save_video )
+    save_fn(pipeline_output, out_file=out_file)
 
     logger.info(f"Saved sample to {out_file}")
     return pipeline_output
